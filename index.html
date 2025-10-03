@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stripe Payment Links — Customise checkout</title>
+  <style>
+    :root{ --bg:#0b0c0e; --ink:#111827; --ink2:#1f2937; --txt:#e5e7eb; --muted:#9aa3af; --brand:#4f46e5; --bd:#1f2430; }
+    @media (prefers-color-scheme: light){
+      :root{ --bg:#f7f7f8; --ink:#ffffff; --ink2:#f3f4f6; --txt:#0b0c0e; --muted:#586174; --bd:#e5e7eb; }
+    }
+    html,body{height:100%}
+    body{margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); color:var(--txt)}
+    header{border-bottom:1px solid var(--bd); background:var(--bg)}
+    .head{max-width:1100px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; gap:12px}
+    .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--brand),#7c83ff)}
+    .badge{font-size:12px;color:var(--muted)}
+    .container{display:grid; grid-template-columns:220px 1fr; gap:20px; max-width:1100px; margin:0 auto; padding:20px 16px}
+    nav h4{margin:10px 0 6px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em}
+    nav a{display:block; padding:6px 8px; border-radius:8px; color:inherit; text-decoration:none}
+    nav a:hover, nav a.active{background:var(--ink2)}
+    .breadcrumbs{font-size:12px; color:var(--muted); margin:0 0 10px}
+    .ask{display:flex; gap:8px; align-items:center; padding:10px 12px; background:var(--ink2); border:1px solid var(--bd); border-radius:12px}
+    .ask input{flex:1; border:0; background:transparent; outline:none; color:var(--txt)}
+    .ask button{border:0; padding:10px 14px; border-radius:10px; background:var(--brand); color:#fff; cursor:pointer}
+    .chips{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+    .chip{font-size:12px; padding:6px 8px; border-radius:999px; background:var(--ink2); border:1px solid var(--bd); cursor:pointer}
+    .answer{margin:12px 0; padding:12px; border:1px solid var(--bd); border-radius:12px; background:var(--ink2); display:none}
+    .answer.show{display:block}
+    .actions{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
+    .btn{font-size:12px; padding:6px 8px; border-radius:8px; border:1px solid var(--bd); background:transparent; color:inherit; cursor:pointer}
+    .article{background:var(--ink); border:1px solid var(--bd); border-radius:16px; padding:18px}
+    .article h1{font-size:24px; margin:6px 0 12px}
+    .article h2{font-size:18px; margin:18px 0 8px}
+    .article pre{background:var(--ink2); padding:12px; border-radius:10px; overflow:auto}
+    table{width:100%; border-collapse:collapse}
+    th,td{border:1px solid var(--bd); padding:8px; text-align:left; vertical-align:top}
+    code, pre, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; }
+    a{color:var(--brand)}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head">
+      <div class="logo" aria-hidden="true"></div>
+      <strong>Stripe Payment Links</strong>
+      <span class="badge">Documentation</span>
+      <div style="flex:1"></div>
+      <span id="last-updated" class="badge"></span>
+    </div>
+  </header>
+
+  <div class="container">
+    <nav aria-label="Sections">
+      <h4>Customise checkout</h4>
+      <a href="#overview" class="navlink">Overview</a>
+      <a href="#limit-payments" class="navlink">Limit number of payments</a>
+      <a href="#deactivated-message" class="navlink">Custom deactivated message</a>
+      <a href="#addresses-phones" class="navlink">Collect addresses & phones</a>
+      <a href="#tax" class="navlink">Collect taxes</a>
+      <a href="#tos" class="navlink">Terms of service</a>
+      <a href="#custom-fields" class="navlink">Custom fields</a>
+      <a href="#local-currency" class="navlink">Local currencies</a>
+      <a href="#save-details" class="navlink">Save payment details</a>
+      <a href="#branding" class="navlink">Branding</a>
+      <a href="#custom-domain" class="navlink">Use your own domain</a>
+      <a href="#store-policies" class="navlink">Store policies</a>
+      <a href="#url-params" class="navlink">URL parameters</a>
+      <a href="#one-subscription" class="navlink">One subscription</a>
+      <a href="#free-trials" class="navlink">Free trials without payment</a>
+    </nav>
+
+    <main>
+      <div class="breadcrumbs">Docs / Payment Links / Customise checkout</div>
+
+      <!-- Scoped ask for THIS page -->
+      <div class="ask" role="search" aria-label="Ask about this page">
+        <input id="ask" placeholder="Ask about this page only…" autocomplete="off" />
+        <button id="askBtn">Ask</button>
+      </div>
+      <div class="chips">
+        <div class="chip" data-q="Limit payments to 1">Limit payments to 1</div>
+        <div class="chip" data-q="Set custom inactive message">Set custom inactive message</div>
+        <div class="chip" data-q="Collect billing and shipping addresses">Collect billing and shipping addresses</div>
+      </div>
+      <div id="answer" class="answer" aria-live="polite"></div>
+
+      <!-- Content -->
+      <article class="article" id="doc">
+        <h1 id="overview">Customise checkout for Payment Links</h1>
+        <p>Collect additional information, taxes, or update your branding.</p>
+        <p>When you create a payment link, you can customise the look and feel of a checkout session for your user. You can also choose what type of customer information to collect and save for later.</p>
+        <p>See <a href="https://docs.stripe.com/payment-links/post-payment.md" target="_blank" rel="noopener">After a payment link payment</a> for post-payment customisation such as redirects and receipts.</p>
+
+        <h2 id="limit-payments">Limit the number of times a payment link can be paid</h2>
+        <p>You can limit how many times a payment link can be paid. When the link reaches the limit it deactivates and customers can’t purchase. After the limit, customers see the default deactivated message or <a href="https://docs.stripe.com/payment-links/customize.md#custom-deactivated-link-message" target="_blank" rel="noopener">a custom message</a>.</p>
+        <ul>
+          <li>Links with subscriptions: go to <strong>Billing</strong> → <strong>Subscriptions</strong>.</li>
+          <li>Other links: open the link details → <strong>Payments and analytics</strong> → <strong>Recent payments</strong>.</li>
+        </ul>
+        <h3>Dashboard</h3>
+        <ol>
+          <li><a href="https://dashboard.stripe.com/payment-links/create" target="_blank" rel="noopener">Create</a> or edit a payment link.</li>
+          <li>Select <strong>Limit the number of payments</strong> and set the limit.</li>
+        </ol>
+        <h3>API</h3>
+<pre><code>curl https://api.stripe.com/v1/payment_links \
+  -u "&lt;&lt;YOUR_SECRET_KEY&gt;&gt;:" \
+  -d "line_items[0][price]"="{{PRICE_ID}}" \
+  -d "line_items[0][quantity]"=1 \
+  -d "restrictions[completed_sessions][limit]"=1
+</code></pre>
+
+        <h2 id="deactivated-message">Set a custom message for deactivated links</h2>
+        <p>Show a tailored message when a link is inactive.</p>
+        <h3>Dashboard</h3>
+        <ul>
+          <li>When you create or edit a link with a limit, select <strong>Change deactivation message</strong>.</li>
+          <li>When deactivating a link, the modal also lets you change the message.</li>
+        </ul>
+        <h3>API</h3>
+<pre><code>curl https://api.stripe.com/v1/payment_links \
+  -u "&lt;&lt;YOUR_SECRET_KEY&gt;&gt;:" \
+  -d "line_items[0][price]"="{{PRICE_ID}}" \
+  -d "line_items[0][quantity]"=1 \
+  --data-urlencode inactive_message="Sorry, we are out of stock for now!"
+</code></pre>
+
+        <h2 id="addresses-phones">Collect customer addresses and phone numbers</h2>
+        <p>Add address and phone fields to the checkout session.</p>
+        <h3>Dashboard</h3>
+        <ol>
+          <li>Create or edit a payment link.</li>
+          <li>Select <strong>Collect customers’ addresses</strong> and choose billing only or billing + shipping.</li>
+          <li>If collecting shipping addresses, select allowed countries and optionally shipping rates.</li>
+          <li>To collect phone numbers, enable <strong>Require customers to provide a phone number</strong>.</li>
+        </ol>
+        <h3>API</h3>
+        <p>Use <code>billing_address_collection</code>, <code>shipping_address_collection</code> with <code>allowed_countries</code>, and <code>phone_number_collection</code>.</p>
+
+        <h2 id="tax">Collect taxes</h2>
+        <p>Use <a href="https://stripe.com/tax" target="_blank" rel="noopener">Stripe Tax</a> to calculate and collect tax automatically.</p>
+        <h3>Dashboard</h3>
+        <ol>
+          <li>Create or edit a payment link.</li>
+          <li>Select <strong>Collect tax automatically</strong>.</li>
+        </ol>
+        <h3>API</h3>
+<pre><code>curl https://api.stripe.com/v1/payment_links \
+  -u "&lt;&lt;YOUR_SECRET_KEY&gt;&gt;:" \
+  -d "line_items[0][price]"="{{PRICE_ID}}" \
+  -d "line_items[0][quantity]"=1 \
+  -d "automatic_tax[enabled]"=true
+</code></pre>
+
+        <h2 id="tos">Collect agreement to your terms of service</h2>
+        <p>Require customers to tick to accept terms. Configure Terms and Privacy URLs in account Public details.</p>
+
+        <h2 id="custom-fields">Add custom fields</h2>
+        <blockquote>Don’t use custom fields to collect personal, protected, or sensitive data, or information restricted by law.</blockquote>
+        <table>
+          <thead><tr><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>Text</td><td>Free-form text up to 255 characters.</td></tr>
+            <tr><td>Numbers only</td><td>Numerical values up to 255 digits.</td></tr>
+            <tr><td>Dropdown</td><td>Up to 10 options via Dashboard; up to 200 via API.</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="local-currency">Automatically convert prices to local currencies</h2>
+        <p>Adaptive Pricing enables local currency checkout. Manual currency prices are supported.</p>
+
+        <h2 id="save-details">Save payment details for future use</h2>
+        <blockquote>Consult legal or compliance guidance when saving payment details.</blockquote>
+        <p>Enable <strong>Save payment details for future use</strong> in Advanced options when creating a Payment Link.</p>
+
+        <h2 id="branding">Apply branding</h2>
+        <p>Customise logo, colours, fonts, and shapes in <a href="https://dashboard.stripe.com/account/branding/checkout" target="_blank" rel="noopener">branding settings</a>.</p>
+
+        <h2 id="custom-domain">Use your own domain</h2>
+        <p>Serve links from a custom subdomain such as <code>pay.example.com</code> instead of <code>buy.stripe.com</code>.</p>
+
+        <h2 id="store-policies">Set store policies and contact information</h2>
+        <p>Show return, refund, and legal policies on the payment page. Add support contact info.</p>
+
+        <h2 id="url-params">Customise checkout with URL parameters</h2>
+        <p>Set language, pre-fill email or promo code, and track campaigns.</p>
+<pre><code>https://buy.stripe.com/test_eVa3do41l4Ye6KkcMN?prefilled_email=jenny%40example.com&prefilled_promo_code=20off&locale=de
+</code></pre>
+
+        <h2 id="one-subscription">Limit customers to one subscription</h2>
+        <p>Redirect existing subscribers to the customer portal or your website to manage their subscription.</p>
+
+        <h2 id="free-trials">Support free trials without collecting payment method details</h2>
+        <p>Allow sign-up without a payment method for subscription products with a free trial. Configure reminders so customers add a payment method before the trial ends.</p>
+      </article>
+    </main>
+  </div>
+
+  <script>
+    // Last updated
+    document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleString();
+
+    // Simple nav highlight
+    (function(){
+      var navlinks = document.querySelectorAll('.navlink');
+      var headers = Array.prototype.slice.call(document.querySelectorAll('#doc h1, #doc h2'));
+      function highlight(){
+        var active = headers.length ? headers[0].id : '';
+        headers.forEach(function(h){ var r=h.getBoundingClientRect(); if(r.top<120) active=h.id; });
+        navlinks.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href').slice(1)===active); });
+      }
+      document.addEventListener('scroll', highlight, {passive:true});
+      highlight();
+    })();
+
+    // Scoped Q&A using docs.json
+    (function(){
+      var data = null; // will load from docs.json
+      fetch('docs.json').then(function(r){ return r.json(); }).then(function(j){ data=j; }).catch(function(){ data=null; });
+
+      var ask = document.getElementById('ask');
+      var askBtn = document.getElementById('askBtn');
+      var chips = document.querySelectorAll('.chip');
+      var panel = document.getElementById('answer');
+
+      function tokens(s){ return String(s).toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(Boolean); }
+      function score(q, text){
+        var A=new Set(tokens(q)), B=new Set(tokens(text));
+        var inter=0; A.forEach(function(x){ if(B.has(x)) inter++; });
+        var uni=new Set([].concat(Array.from(A),Array.from(B))).size;
+        return uni? inter/uni : 0;
+      }
+
+      function show(html, id){
+        panel.innerHTML = html + (id? '<div class="actions"><a class="btn" href="#'+id+'">Jump to section</a><button class="btn" id="copyAns">Copy answer</button></div>' : '');
+        panel.classList.add('show');
+        var c=document.getElementById('copyAns');
+        if(c){ c.onclick=function(){
+          var text = panel.textContent || '';
+          if (navigator.clipboard) navigator.clipboard.writeText(text);
+        };}
+      }
+
+      function answer(q){
+        if(!data || !Array.isArray(data.faqs)){ show('<p>No data loaded. Check docs.json.</p>'); return; }
+        var best=null, bestS=-1;
+        data.faqs.forEach(function(f){
+          var s=score(q, f.q + ' ' + f.a);
+          if(s>bestS){ bestS=s; best=f; }
+        });
+        if(best && bestS>0.12){
+          show('<div><strong>On this page</strong></div><p>'+best.a+'</p>', best.id);
+        } else {
+          var links = Array.prototype.slice.call(document.querySelectorAll('#doc h2'))
+            .slice(0,6)
+            .map(function(h){ return '<a class="btn" href="#'+h.id+'">'+h.textContent+'</a>'; })
+            .join(' ');
+          show('<p>No direct answer found. Try these sections:</p><div class="actions">'+links+'</div>');
+        }
+      }
+
+      askBtn.onclick = function(){ var q=ask.value.trim(); if(q){ ask.value=''; answer(q); } };
+      ask.onkeydown = function(e){ if(e.key==='Enter'){ askBtn.onclick(); } };
+      chips.forEach(function(c){ c.onclick=function(){ ask.value=c.getAttribute('data-q'); askBtn.onclick(); }; });
+    })();
+  </script>
+</body>
+</html>
