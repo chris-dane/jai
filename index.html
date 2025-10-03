@@ -11,6 +11,7 @@
     }
     html,body{height:100%}
     body{margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); color:var(--txt)}
+    *:focus{outline:2px solid var(--brand);outline-offset:2px}
     header{border-bottom:1px solid var(--bd); background:var(--bg)}
     .head{max-width:1100px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; gap:12px}
     .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--brand),#7c83ff)}
@@ -37,6 +38,8 @@
     th,td{border:1px solid var(--bd); padding:8px; text-align:left; vertical-align:top}
     code, pre, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; }
     a{color:var(--brand)}
+    .highlight{background:rgba(79,70,229,0.1);border-radius:6px;transition:background-color 0.3s ease}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   </style>
 </head>
 <body>
@@ -83,7 +86,7 @@
         <div class="chip" data-q="Set custom inactive message">Set custom inactive message</div>
         <div class="chip" data-q="Collect billing and shipping addresses">Collect billing and shipping addresses</div>
       </div>
-      <div id="answer" class="answer" aria-live="polite"></div>
+      <div id="answer" class="answer" aria-live="polite" tabindex="-1"></div>
 
       <!-- Content -->
       <article class="article" id="doc">
@@ -197,73 +200,28 @@
     </main>
   </div>
 
-  <script>
-    // Last updated
-    document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleString();
+  <script type="module">
+    import { initNavHighlight } from './js/nav.js';
+    import { initAsk } from './js/ask.js';
 
-    // Simple nav highlight
-    (function(){
-      var navlinks = document.querySelectorAll('.navlink');
-      var headers = Array.prototype.slice.call(document.querySelectorAll('#doc h1, #doc h2'));
-      function highlight(){
-        var active = headers.length ? headers[0].id : '';
-        headers.forEach(function(h){ var r=h.getBoundingClientRect(); if(r.top<120) active=h.id; });
-        navlinks.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href').slice(1)===active); });
-      }
-      document.addEventListener('scroll', highlight, {passive:true});
-      highlight();
-    })();
+    document.getElementById('last-updated').textContent =
+      'Last updated: ' + new Date().toLocaleString();
 
-    // Scoped Q&A using docs.json
-    (function(){
-      var data = null; // will load from docs.json
-      fetch('docs.json').then(function(r){ return r.json(); }).then(function(j){ data=j; }).catch(function(){ data=null; });
+    document.addEventListener('DOMContentLoaded', () => {
+      initNavHighlight({
+        links: document.querySelectorAll('.navlink'),
+        headings: document.querySelectorAll('#doc h1, #doc h2')
+      });
 
-      var ask = document.getElementById('ask');
-      var askBtn = document.getElementById('askBtn');
-      var chips = document.querySelectorAll('.chip');
-      var panel = document.getElementById('answer');
-
-      function tokens(s){ return String(s).toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(Boolean); }
-      function score(q, text){
-        var A=new Set(tokens(q)), B=new Set(tokens(text));
-        var inter=0; A.forEach(function(x){ if(B.has(x)) inter++; });
-        var uni=new Set([].concat(Array.from(A),Array.from(B))).size;
-        return uni? inter/uni : 0;
-      }
-
-      function show(html, id){
-        panel.innerHTML = html + (id? '<div class="actions"><a class="btn" href="#'+id+'">Jump to section</a><button class="btn" id="copyAns">Copy answer</button></div>' : '');
-        panel.classList.add('show');
-        var c=document.getElementById('copyAns');
-        if(c){ c.onclick=function(){
-          var text = panel.textContent || '';
-          if (navigator.clipboard) navigator.clipboard.writeText(text);
-        };}
-      }
-
-      function answer(q){
-        if(!data || !Array.isArray(data.faqs)){ show('<p>No data loaded. Check docs.json.</p>'); return; }
-        var best=null, bestS=-1;
-        data.faqs.forEach(function(f){
-          var s=score(q, f.q + ' ' + f.a);
-          if(s>bestS){ bestS=s; best=f; }
-        });
-        if(best && bestS>0.12){
-          show('<div><strong>On this page</strong></div><p>'+best.a+'</p>', best.id);
-        } else {
-          var links = Array.prototype.slice.call(document.querySelectorAll('#doc h2'))
-            .slice(0,6)
-            .map(function(h){ return '<a class="btn" href="#'+h.id+'">'+h.textContent+'</a>'; })
-            .join(' ');
-          show('<p>No direct answer found. Try these sections:</p><div class="actions">'+links+'</div>');
-        }
-      }
-
-      askBtn.onclick = function(){ var q=ask.value.trim(); if(q){ ask.value=''; answer(q); } };
-      ask.onkeydown = function(e){ if(e.key==='Enter'){ askBtn.onclick(); } };
-      chips.forEach(function(c){ c.onclick=function(){ ask.value=c.getAttribute('data-q'); askBtn.onclick(); }; });
-    })();
+      initAsk({
+        inputEl: document.getElementById('ask'),
+        buttonEl: document.getElementById('askBtn'),
+        chips: document.querySelectorAll('.chip'),
+        panelEl: document.getElementById('answer'),
+        dataSource: 'docs.json',
+        sectionSelector: '#doc h2'
+      });
+    });
   </script>
 </body>
 </html>
