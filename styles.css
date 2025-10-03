@@ -164,30 +164,39 @@ body {
 }
 
 .hints-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 #hints-list:empty {
-  display: none;
+  display: none !important;
 }
 
 .hints-list li:empty {
-  display: none;
+  display: none !important;
 }
 
-.hints-list li {
+
+.hints-list li { margin: 0; }
+
+.hint-btn {
+  width: 100%;
   padding: 10px 12px;
+  border: none;
   border-radius: 8px;
-  background: var(--surface-2, #f3f4f6);
+  background: var(--bg-secondary);
   cursor: pointer;
   transition: background-color 0.2s ease;
+  text-align: left;
+  font-size: inherit;
+  font-family: inherit;
 }
 
-.hints-list li:hover {
+.hint-btn:hover {
   background: var(--bg-tertiary);
 }
 
@@ -263,12 +272,22 @@ body {
 
 /* Answer panel */
 #answer-panel {
+  display: none;
+  margin-top: 16px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--border-radius-lg);
   padding: var(--space-lg);
   margin-bottom: var(--space-lg);
   box-shadow: 0 2px 4px var(--shadow);
+}
+
+#answer-panel.show {
+  display: block;
+}
+
+#answer-panel:empty {
+  display: none !important;
 }
 
 .answer-card {

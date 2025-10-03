@@ -4,11 +4,10 @@
  */
 
 // --- constants
-const CANDIDATE_FLOOR = 0.05;   // recall
-const STRONG_MATCH = 0.20;      // precision
-const BOOST_DOC   = 0.05;       // doc title hit
-const BOOST_H2    = 0.08;       // section heading hit
-const BOOST_FAQ   = 0.06;       // FAQ preference
+const SCORE_THRESHOLD = 0.05;   // minimum section score
+const MMR_K = 4;                // max sentences to select
+const MMR_LAMBDA = 0.72;        // MMR relevance vs diversity balance
+const AVG_LENGTH = 120;         // average section length for BM25
 
 // --- readiness state
 let corpus = null;
@@ -16,9 +15,9 @@ let corpusReady = false;
 
 // --- sample queries
 const SAMPLE_QUERIES = [
-  "Make a payment link single-use and what will customers see after?",
-  "Collect billing and shipping addresses and phone number",
-  "What security features are available?"
+  "What security features are available?",
+  "How do I secure webhooks and handle signature verification and retries?",
+  "How do I set up authentication and apply API rate limits?"
 ];
 
 async function loadCorpus(url) {
@@ -41,161 +40,167 @@ async function loadCorpus(url) {
   }
 }
 
-// --- token utils
-const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'in', 'on', 'with', 'is', 'are', 'be', 'can', 'how', 'what', 'do', 'does', 'did', 'i', 'we', 'you']);
+// ---------- text utils ----------
+const STOP = new Set("a an and or the is are was were be been being of to in for on with by at from as it this that which".split(" "));
+const splitSentences = (t) => (t||"").replace(/\s+/g," ").match(/[^.!?]+[.!?]/g) || [];
+const tokens = (t) => (t||"").toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/).filter(x=>x && !STOP.has(x));
+const uniq = (arr) => [...new Set(arr)];
 
-function tokeniseClean(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(t => t && !STOP.has(t));
-}
-
-function dice(A, B) {
-  if (!A.length || !B.length) return 0;
-  const SA = new Set(A), SB = new Set(B);
-  const inter = [...SA].filter(x => SB.has(x)).length;
-  return (2 * inter) / (SA.size + SB.size);
-}
-
-function headingScore(query, heading) {
-  const q = tokeniseClean(query), h = tokeniseClean(heading);
-  if (!q.length || !h.length) return 0;
-  const H = new Set(h);
-  if (q.every(x => H.has(x))) return 0.95; // strong exact-ish
-  return dice(q, h) + 0.15;              // bias to headings
-}
-
-function bestSentenceScore(query, body) {
-  const q = tokeniseClean(query);
-  const sentences = String(body).split(/(?<=[.!?])\s+/).slice(0, 12);
-  let best = 0, sent = '';
-  for (const s of sentences) {
-    const sc = dice(q, tokeniseClean(s));
-    if (sc > best) { best = sc; sent = s; }
-  }
-  return { score: best, sentence: sent };
-}
-
-// --- indexing search across docs, sections, faqs
-function searchCorpus(query) {
-  const q = query.trim();
-  if (!q) return [];
-  const results = [];
-
-  for (const d of corpus.docs) {
-    // doc title as candidate
-    const docS = headingScore(q, d.title);
-    if (docS >= 0.30) {
-      results.push({ type: 'doc', score: docS + BOOST_DOC, doc: d, snippet: d.title });
-    }
-    // sections
-    for (const s of d.sections || []) {
-      const h = headingScore(q, s.heading);
-      const { score: b, sentence } = bestSentenceScore(q, s.body || '');
-      let score = Math.max(h, b);
-      if (h > 0) score += BOOST_H2;
-      if (score >= CANDIDATE_FLOOR) {
-        results.push({
-          type: 'section', score,
-          doc: d, section: s,
-          snippet: h >= b ? s.heading : sentence
-        });
-      }
-    }
-    // faqs (optional in corpus)
-    for (const f of d.faqs || []) {
-      const h = headingScore(q, f.q || '');
-      const { score: b, sentence } = bestSentenceScore(q, f.a || '');
-      let score = Math.max(h, b) + BOOST_FAQ;
-      if (score >= CANDIDATE_FLOOR) {
-        results.push({
-          type: 'faq', score,
-          doc: d, sectionId: f.section_id,
-          snippet: sentence || f.q
-        });
-      }
-    }
-  }
-  results.sort((a, b) => b.score - a.score);
-  return results;
-}
-
-// --- selection: cap to ≤2 docs, ≤3 sections
-function selectSources(cands) {
-  const picked = [];
-  const seenSections = new Set();
-  const seenDocs = new Set();
-  for (const c of cands) {
-    const docId = c.doc.id;
-    const secId = c.type === 'section' ? c.section.id : (c.sectionId || null);
-    if (secId && seenSections.has(secId)) continue;
-    if (seenDocs.size === 2 && !seenDocs.has(docId)) continue;
-    picked.push(c);
-    if (secId) seenSections.add(secId);
-    seenDocs.add(docId);
-    if (picked.length >= 3) break;
-  }
-  return picked;
-}
-
-// --- synthesis from extracted sentences only
-function composeAnswer(query, sources) {
-  // build sentences per source
-  const blocks = sources.map(src => {
-    if (src.type === 'section') {
-      const { sentence } = bestSentenceScore(query, src.section.body || '');
-      return { src, sentences: sentence ? [sentence] : [src.snippet] };
-    } else if (src.type === 'faq') {
-      const { sentence } = bestSentenceScore(query, src.snippet || '');
-      return { src, sentences: sentence ? [sentence] : [src.snippet] };
-    } else {
-      return { src, sentences: [src.snippet] };
-    }
+// ---------- lightweight IDF ----------
+function buildIdfIndex(corpus) {
+  const df = new Map();
+  let N = 0;
+  corpus.forEach(doc => {
+    doc.sections.forEach(s => {
+      N++;
+      uniq(tokens([s.heading, s.body].join(" "))).forEach(tok=>{
+        df.set(tok, (df.get(tok)||0)+1);
+      });
+    });
   });
-  // first paragraph = join first sentences, max ~2
-  const lead = blocks.map(b => b.sentences[0]).filter(Boolean).slice(0, 2).join(' ');
-  const html = [
-    `<p>${lead}</p>`,
-    `<div class="sources">Sources:</div>`,
-    `<div class="sources-list">` +
-      blocks.map(b => {
-        const docTitle = b.src.doc.title;
-        const secTitle = b.src.type === 'section'
-          ? b.src.section.heading
-          : (b.src.type === 'faq' ? (b.src.sectionId || 'FAQ') : 'Document');
-        const secId = b.src.type === 'section' ? b.src.section.id : (b.src.sectionId || '');
-        return `
-          <div class="source-chip">
-            <span class="source-label">${docTitle} › ${secTitle}</span>
-            <div class="source-buttons">
-              <button class="btn open-doc" data-doc="${b.src.doc.id}">Open document</button>
-              ${secId ? `<button class="btn jump-sec" data-doc="${b.src.doc.id}" data-sec="${secId}">Jump to: ${secTitle}</button>` : ''}
-            </div>
-          </div>`;
-      }).join('') +
-    `</div>`
-  ].join('\n');
-  return html;
+  const idf = new Map();
+  df.forEach((n, tok)=> idf.set(tok, Math.log(1 + (N - n + 0.5)/(n + 0.5))));
+  return {idf, N};
+}
+
+// ---------- section scorer (BM25-lite) ----------
+function scoreSection(queryToks, sec, idf) {
+  const text = [sec.heading, sec.body].join(" ");
+  const toks = tokens(text);
+  const freq = new Map();
+  toks.forEach(t=>freq.set(t,(freq.get(t)||0)+1));
+  const len = toks.length || 1;
+  const avgLen = AVG_LENGTH;
+  const k1 = 1.2, b = 0.75;
+  let s = 0;
+  queryToks.forEach(q=>{
+    const f = freq.get(q)||0;
+    const w = (idf.get(q)||0);
+    s += w * (f*(k1+1)) / (f + k1*(1 - b + b*(len/avgLen)));
+  });
+  // boosts
+  const htoks = new Set(tokens(sec.heading));
+  queryToks.forEach(q=> { if (htoks.has(q)) s += 0.2; });
+  return s;
+}
+
+// ---------- sentence extraction + MMR ----------
+function extractCandidates(query, sec) {
+  const qs = tokens(query);
+  return splitSentences(sec.body).map(s=>{
+    const overlap = new Set(tokens(s).filter(t=>qs.includes(t))).size;
+    return {sent:s.trim(), score:overlap};
+  }).filter(x=>x.score>0);
+}
+
+function mmrSelect(cands, k=3, lambda=0.7) {
+  const selected = [];
+  while (selected.length<k && cands.length) {
+    let bestIdx = -1, bestScore = -1;
+    for (let i=0;i<cands.length;i++){
+      const simToSel = selected.length ? Math.max(...selected.map(sel=>jaccard(cands[i].sent, sel.sent))) : 0;
+      const mmr = lambda*cands[i].score - (1-lambda)*simToSel;
+      if (mmr>bestScore){ bestScore=mmr; bestIdx=i; }
+    }
+    selected.push(cands.splice(bestIdx,1)[0]);
+  }
+  return selected;
+}
+
+function jaccard(a,b){
+  const A = new Set(tokens(a)), B = new Set(tokens(b));
+  const I = [...A].filter(x=>B.has(x)).length;
+  const U = new Set([...A,...B]).size || 1;
+  return I/U;
+}
+
+// ---------- main answer generator ----------
+function generateAnswer(query, docs) {
+  const {idf} = buildIdfIndex(docs);
+  const qToks = uniq(tokens(query));
+  // rank sections
+  const scored = [];
+  docs.forEach(doc=>{
+    doc.sections.forEach(sec=>{
+      const s = scoreSection(qToks, sec, idf);
+      if (s>SCORE_THRESHOLD) scored.push({doc, sec, score:s});
+    });
+  });
+  scored.sort((a,b)=>b.score-a.score);
+  const top = scored.slice(0,6);
+
+  // extract grounded sentences
+  let allCands = [];
+  top.forEach(({doc,sec,score})=>{
+    const c = extractCandidates(query, sec).map(x=>({ ...x, doc, sec, secScore:score }));
+    allCands = allCands.concat(c);
+  });
+  if (!allCands.length) return null;
+
+  // select sentences with MMR across sections
+  const picked = mmrSelect(allCands.sort((a,b)=>b.score-a.score), MMR_K, MMR_LAMBDA);
+
+  // compose with minimal glue; keep sentences verbatim
+  const lead = picked.map(p=>p.sent).join(" ");
+  // group sources (≤2 docs, ≤3 sections)
+  const srcMap = new Map();
+  for (const p of picked) {
+    const key = p.doc.id + "::" + p.sec.id;
+    if (!srcMap.has(key)) srcMap.set(key, {doc:p.doc, sec:p.sec});
+    if (srcMap.size>=3) break;
+  }
+  const sources = [...srcMap.values()];
+
+  return {
+    text: lead,                     // grounded: pure extracted sentences
+    sources                          // [{doc, sec}]
+  };
+}
+
+// --- grounded answer generation
+function generateGroundedAnswer(query) {
+  if (!corpus || !corpus.docs) return null;
+  return generateAnswer(query, corpus.docs);
 }
 
 // --- render pipeline
-function renderAnswerOrFallback(query, cands) {
+function renderAnswerOrFallback(query) {
   const panel = document.getElementById('answer-panel');
   const hints = document.getElementById('ask-hints');
   if (hints) hints.style.display = 'none';
 
-  const strong = cands.filter(c => c.score >= STRONG_MATCH);
-  const pool = strong.length ? strong : cands;
-  if (!pool.length) {
+  const result = generateGroundedAnswer(query);
+  
+  if (!result) {
     panel.innerHTML = `
       <div class="answer-card">
         <h3>No results found</h3>
         <p>I couldn't find any relevant information. Try rephrasing your question or browse the documentation using the sidebar.</p>
         <button class="btn copy-answer">Copy Answer</button>
       </div>`;
+    panel.classList.add('show');        // make visible
     panel.focus();
     return;
   }
-  const sources = selectSources(pool);
-  panel.innerHTML = composeAnswer(query, sources);
+
+  // Render grounded answer with sources
+  const sourcesHtml = result.sources.map(({doc, sec}) => `
+    <div class="source-chip">
+      <span class="source-label">${doc.title} › ${sec.heading}</span>
+      <div class="source-buttons">
+        <button class="btn open-doc" data-doc="${doc.id}">Open document</button>
+        <button class="btn jump-sec" data-doc="${doc.id}" data-sec="${sec.id}">Jump to: ${sec.heading}</button>
+      </div>
+    </div>
+  `).join('');
+
+  panel.innerHTML = `
+    <p>${result.text}</p>
+    <div class="sources">Sources:</div>
+    <div class="sources-list">${sourcesHtml}</div>
+  `;
+  
+  panel.classList.add('show');        // make visible
   panel.focus();
   wireAnswerButtons();
 }
@@ -338,30 +343,27 @@ function renderSidebar(docs) {
   });
 }
 
-function makeHintLi(query) {
-  const li = document.createElement('li');
-  li.textContent = `"${query}"`;
-  li.addEventListener('click', () => {
-    const input = document.getElementById('global-ask');
-    input.value = query;
-    const button = document.getElementById('ask-button');
-    if (button && !button.disabled) {
-      const q = input.value.trim();
-      if (q) {
-        const cands = searchCorpus(q);
-        renderAnswerOrFallback(q, cands);
-      }
-    }
-  });
-  return li;
-}
-
 function renderHints() {
-  const hintsList = document.getElementById('hints-list');
-  if (!hintsList) return;
+  const list = document.getElementById('hints-list');
+  const wrap = document.getElementById('ask-hints');
+  if (!list) return;
   
-  const filteredQueries = SAMPLE_QUERIES.filter(Boolean);
-  hintsList.replaceChildren(...filteredQueries.map(makeHintLi));
+  while (list.firstChild) list.removeChild(list.firstChild);
+  
+  for (const q of SAMPLE_QUERIES) {
+    const s = (q||"").trim(); 
+    if (!s) continue;
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button'; 
+    btn.className = 'hint-btn'; 
+    btn.dataset.q = s; 
+    btn.textContent = `"${s}"`;
+    li.appendChild(btn); 
+    list.appendChild(li);
+  }
+  
+  wrap && (wrap.style.display = list.childElementCount ? '' : 'none');
 }
 
 // --- init
@@ -372,15 +374,15 @@ function initGlobalAsk() {
   function submit() {
     if (!corpusReady) return;
     const q = input.value.trim();
+    const panel = document.getElementById('answer-panel');
+    
     if (!q) {
-      const panel = document.getElementById('answer-panel');
-      const hints = document.getElementById('ask-hints');
-      panel.innerHTML = '';
-      if (hints) hints.style.display = '';
+      panel.replaceChildren();            // remove all nodes
+      panel.classList.remove('show');     // keep hidden
+      renderHints();
       return;
     }
-    const cands = searchCorpus(q);
-    renderAnswerOrFallback(q, cands);
+    renderAnswerOrFallback(q);
   }
   
   input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
@@ -392,6 +394,18 @@ function initGlobalAsk() {
       e.preventDefault();
       input.focus();
     }
+  });
+  
+  // Setup event delegation for hint clicks
+  document.getElementById('hints-list')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.hint-btn'); 
+    if (!btn) return;
+    const input = document.getElementById('global-ask');
+    const panel = document.getElementById('answer-panel');
+    input.value = btn.dataset.q || '';
+    panel.replaceChildren(); 
+    panel.classList.remove('show');
+    submit();
   });
   
   // Render hints from JavaScript
