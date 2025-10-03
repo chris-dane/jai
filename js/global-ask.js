@@ -1,213 +1,285 @@
 /**
- * Global Documentation Q&A System
+ * Global Documentation Q&A System - Overhauled
  * Provides conversational interface across all documentation
  */
 
-// Global state
+// --- constants
+const CANDIDATE_FLOOR = 0.05;   // recall
+const STRONG_MATCH = 0.20;      // precision
+const BOOST_DOC   = 0.05;       // doc title hit
+const BOOST_H2    = 0.08;       // section heading hit
+const BOOST_FAQ   = 0.06;       // FAQ preference
+
+// --- readiness state
 let corpus = null;
-let currentDoc = null;
+let corpusReady = false;
 
-// DOM elements
-const askInput = document.getElementById('global-ask');
-const askButton = document.getElementById('ask-button');
-const answerPanel = document.getElementById('answer-panel');
-const docContent = document.getElementById('doc-content');
-const docList = document.getElementById('doc-list');
+// --- sample queries
+const SAMPLE_QUERIES = [
+  "Make a payment link single-use and what will customers see after?",
+  "Collect billing and shipping addresses and phone number",
+  "What security features are available?"
+];
 
-// Utility functions
-function tokenise(text) {
-  return String(text)
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(token => token.length > 0);
+async function loadCorpus(url) {
+  const state = document.getElementById('load-state');
+  const askBtn = document.getElementById('ask-button');
+  try {
+    state.textContent = 'Loading documentation…';
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    corpus = await r.json();
+    if (!corpus || !Array.isArray(corpus.docs)) throw new Error('Invalid corpus');
+    corpusReady = true;
+    askBtn.disabled = false;
+    state.textContent = '';
+    renderSidebar(corpus.docs);
+  } catch (e) {
+    corpusReady = false;
+    askBtn.disabled = true;
+    state.textContent = 'Docs failed to load. Please refresh.';
+  }
 }
 
-function calculateRelevanceScore(query, text) {
-  const queryTokens = new Set(tokenise(query));
-  const textTokens = new Set(tokenise(text));
-  
-  if (queryTokens.size === 0 || textTokens.size === 0) return 0;
-  
-  const intersection = new Set([...queryTokens].filter(token => textTokens.has(token)));
-  const union = new Set([...queryTokens, ...textTokens]);
-  
-  return intersection.size / union.size;
+// --- token utils
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'of', 'for', 'in', 'on', 'with', 'is', 'are', 'be', 'can', 'how', 'what', 'do', 'does', 'did', 'i', 'we', 'you']);
+
+function tokeniseClean(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(t => t && !STOP.has(t));
 }
 
+function dice(A, B) {
+  if (!A.length || !B.length) return 0;
+  const SA = new Set(A), SB = new Set(B);
+  const inter = [...SA].filter(x => SB.has(x)).length;
+  return (2 * inter) / (SA.size + SB.size);
+}
+
+function headingScore(query, heading) {
+  const q = tokeniseClean(query), h = tokeniseClean(heading);
+  if (!q.length || !h.length) return 0;
+  const H = new Set(h);
+  if (q.every(x => H.has(x))) return 0.95; // strong exact-ish
+  return dice(q, h) + 0.15;              // bias to headings
+}
+
+function bestSentenceScore(query, body) {
+  const q = tokeniseClean(query);
+  const sentences = String(body).split(/(?<=[.!?])\s+/).slice(0, 12);
+  let best = 0, sent = '';
+  for (const s of sentences) {
+    const sc = dice(q, tokeniseClean(s));
+    if (sc > best) { best = sc; sent = s; }
+  }
+  return { score: best, sentence: sent };
+}
+
+// --- indexing search across docs, sections, faqs
 function searchCorpus(query) {
-  if (!corpus || !query.trim()) return [];
-  
+  const q = query.trim();
+  if (!q) return [];
   const results = [];
-  const queryLower = query.toLowerCase();
-  
-  corpus.docs.forEach(doc => {
-    // Search in document title
-    const titleScore = calculateRelevanceScore(query, doc.title);
-    if (titleScore > 0.1) {
-      results.push({
-        type: 'doc',
-        doc,
-        section: null,
-        score: titleScore * 1.5, // Boost title matches
-        text: doc.title,
-        context: 'Document title'
-      });
+
+  for (const d of corpus.docs) {
+    // doc title as candidate
+    const docS = headingScore(q, d.title);
+    if (docS >= 0.30) {
+      results.push({ type: 'doc', score: docS + BOOST_DOC, doc: d, snippet: d.title });
     }
-    
-    // Search in sections
-    doc.sections.forEach(section => {
-      const sectionText = `${section.heading} ${section.body}`;
-      const sectionScore = calculateRelevanceScore(query, sectionText);
-      
-      if (sectionScore > 0.1) {
+    // sections
+    for (const s of d.sections || []) {
+      const h = headingScore(q, s.heading);
+      const { score: b, sentence } = bestSentenceScore(q, s.body || '');
+      let score = Math.max(h, b);
+      if (h > 0) score += BOOST_H2;
+      if (score >= CANDIDATE_FLOOR) {
         results.push({
-          type: 'section',
-          doc,
-          section,
-          score: sectionScore,
-          text: section.body,
-          context: `${doc.title} > ${section.heading}`
+          type: 'section', score,
+          doc: d, section: s,
+          snippet: h >= b ? s.heading : sentence
         });
       }
-    });
-  });
-  
-  // Sort by relevance score
-  return results.sort((a, b) => b.score - a.score);
-}
-
-function generateAnswer(query, results) {
-  if (results.length === 0) {
-    return {
-      html: `
-        <h3>No results found</h3>
-        <p>I couldn't find any relevant information for "${query}". Try rephrasing your question or browse the documentation using the sidebar.</p>
-      `,
-      sources: []
-    };
-  }
-  
-  const topResult = results[0];
-  const topResults = results.slice(0, 3);
-  
-  // If we have a strong match (score > 0.3), provide a detailed answer
-  if (topResult.score > 0.3) {
-    let answerHtml = `<h3>Answer</h3>`;
-    
-    if (topResult.type === 'section') {
-      answerHtml += `<p>${topResult.section.body}</p>`;
-    } else {
-      // For document matches, show the first section
-      const firstSection = topResult.doc.sections[0];
-      if (firstSection) {
-        answerHtml += `<p>${firstSection.body}</p>`;
+    }
+    // faqs (optional in corpus)
+    for (const f of d.faqs || []) {
+      const h = headingScore(q, f.q || '');
+      const { score: b, sentence } = bestSentenceScore(q, f.a || '');
+      let score = Math.max(h, b) + BOOST_FAQ;
+      if (score >= CANDIDATE_FLOOR) {
+        results.push({
+          type: 'faq', score,
+          doc: d, sectionId: f.section_id,
+          snippet: sentence || f.q
+        });
       }
     }
-    
-    // Add related information if available
-    if (topResults.length > 1) {
-      answerHtml += `<h4>Related Information</h4><ul>`;
-      topResults.slice(1).forEach(result => {
-        if (result.type === 'section') {
-          answerHtml += `<li><strong>${result.section.heading}</strong>: ${result.section.body.substring(0, 150)}...</li>`;
-        }
-      });
-      answerHtml += `</ul>`;
-    }
-    
-    return {
-      html: answerHtml,
-      sources: topResults.map(result => ({
-        doc: result.doc,
-        section: result.section,
-        context: result.context
-      }))
-    };
-  } else {
-    // For weaker matches, suggest relevant documents
-    const uniqueDocs = [...new Set(topResults.map(r => r.doc))];
-    
-    let answerHtml = `
-      <h3>Related Documentation</h3>
-      <p>Here are the most relevant documents for "${query}":</p>
-      <ul>
-    `;
-    
-    uniqueDocs.slice(0, 3).forEach(doc => {
-      answerHtml += `<li><strong>${doc.title}</strong> - Click to view this documentation</li>`;
-    });
-    
-    answerHtml += `</ul>`;
-    
-    return {
-      html: answerHtml,
-      sources: uniqueDocs.slice(0, 3).map(doc => ({
-        doc,
-        section: null,
-        context: doc.title
-      }))
-    };
   }
+  results.sort((a, b) => b.score - a.score);
+  return results;
 }
 
-function renderAnswer(answer, query) {
-  answerPanel.innerHTML = answer.html;
-  
-  // Add action buttons
-  const actionsDiv = document.createElement('div');
-  actionsDiv.className = 'answer-actions';
-  
-  // Copy answer button
-  const copyButton = document.createElement('button');
-  copyButton.className = 'btn btn-primary';
-  copyButton.textContent = 'Copy Answer';
-  copyButton.onclick = () => copyToClipboard(answerPanel.textContent);
-  actionsDiv.appendChild(copyButton);
-  
-  // Jump to source buttons
-  answer.sources.forEach(source => {
-    if (source.section) {
-      const jumpButton = document.createElement('button');
-      jumpButton.className = 'btn';
-      jumpButton.textContent = `Jump to: ${source.section.heading}`;
-      jumpButton.onclick = () => jumpToSection(source.doc, source.section);
-      actionsDiv.appendChild(jumpButton);
+// --- selection: cap to ≤2 docs, ≤3 sections
+function selectSources(cands) {
+  const picked = [];
+  const seenSections = new Set();
+  const seenDocs = new Set();
+  for (const c of cands) {
+    const docId = c.doc.id;
+    const secId = c.type === 'section' ? c.section.id : (c.sectionId || null);
+    if (secId && seenSections.has(secId)) continue;
+    if (seenDocs.size === 2 && !seenDocs.has(docId)) continue;
+    picked.push(c);
+    if (secId) seenSections.add(secId);
+    seenDocs.add(docId);
+    if (picked.length >= 3) break;
+  }
+  return picked;
+}
+
+// --- synthesis from extracted sentences only
+function composeAnswer(query, sources) {
+  // build sentences per source
+  const blocks = sources.map(src => {
+    if (src.type === 'section') {
+      const { sentence } = bestSentenceScore(query, src.section.body || '');
+      return { src, sentences: sentence ? [sentence] : [src.snippet] };
+    } else if (src.type === 'faq') {
+      const { sentence } = bestSentenceScore(query, src.snippet || '');
+      return { src, sentences: sentence ? [sentence] : [src.snippet] };
     } else {
-      const viewButton = document.createElement('button');
-      viewButton.className = 'btn';
-      viewButton.textContent = `View: ${source.doc.title}`;
-      viewButton.onclick = () => loadDocument(source.doc);
-      actionsDiv.appendChild(viewButton);
+      return { src, sentences: [src.snippet] };
     }
   });
-  
-  answerPanel.appendChild(actionsDiv);
-  answerPanel.style.display = 'block';
-  answerPanel.focus();
+  // first paragraph = join first sentences, max ~2
+  const lead = blocks.map(b => b.sentences[0]).filter(Boolean).slice(0, 2).join(' ');
+  const html = [
+    `<p>${lead}</p>`,
+    `<div class="sources">Sources:</div>`,
+    `<div class="sources-list">` +
+      blocks.map(b => {
+        const docTitle = b.src.doc.title;
+        const secTitle = b.src.type === 'section'
+          ? b.src.section.heading
+          : (b.src.type === 'faq' ? (b.src.sectionId || 'FAQ') : 'Document');
+        const secId = b.src.type === 'section' ? b.src.section.id : (b.src.sectionId || '');
+        return `
+          <div class="source-chip">
+            <span class="source-label">${docTitle} › ${secTitle}</span>
+            <div class="source-buttons">
+              <button class="btn open-doc" data-doc="${b.src.doc.id}">Open document</button>
+              ${secId ? `<button class="btn jump-sec" data-doc="${b.src.doc.id}" data-sec="${secId}">Jump to: ${secTitle}</button>` : ''}
+            </div>
+          </div>`;
+      }).join('') +
+    `</div>`
+  ].join('\n');
+  return html;
 }
 
-function copyToClipboard(text) {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => {
-      announce('Answer copied to clipboard');
-    }).catch(() => {
-      announce('Failed to copy to clipboard');
-    });
-  } else {
-    // Fallback for older browsers
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    document.body.appendChild(textArea);
-    textArea.select();
-    try {
-      document.execCommand('copy');
-      announce('Answer copied to clipboard');
-    } catch (err) {
-      announce('Failed to copy to clipboard');
-    }
-    document.body.removeChild(textArea);
+// --- render pipeline
+function renderAnswerOrFallback(query, cands) {
+  const panel = document.getElementById('answer-panel');
+  const hints = document.getElementById('ask-hints');
+  if (hints) hints.style.display = 'none';
+
+  const strong = cands.filter(c => c.score >= STRONG_MATCH);
+  const pool = strong.length ? strong : cands;
+  if (!pool.length) {
+    panel.innerHTML = `
+      <div class="answer-card">
+        <h3>No results found</h3>
+        <p>I couldn't find any relevant information. Try rephrasing your question or browse the documentation using the sidebar.</p>
+        <button class="btn copy-answer">Copy Answer</button>
+      </div>`;
+    panel.focus();
+    return;
   }
+  const sources = selectSources(pool);
+  panel.innerHTML = composeAnswer(query, sources);
+  panel.focus();
+  wireAnswerButtons();
+}
+
+// --- wire up answer buttons
+function wireAnswerButtons() {
+  // Copy answer button
+  const copyBtn = document.querySelector('.copy-answer');
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      const text = document.getElementById('answer-panel').textContent;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          announce('Answer copied to clipboard');
+        });
+      }
+    };
+  }
+
+  // Open document buttons
+  document.querySelectorAll('.open-doc').forEach(btn => {
+    btn.onclick = () => {
+      const docId = btn.getAttribute('data-doc');
+      const doc = corpus.docs.find(d => d.id === docId);
+      if (doc) loadDocument(doc);
+    };
+  });
+
+  // Jump to section buttons
+  document.querySelectorAll('.jump-sec').forEach(btn => {
+    btn.onclick = () => {
+      const docId = btn.getAttribute('data-doc');
+      const secId = btn.getAttribute('data-sec');
+      const doc = corpus.docs.find(d => d.id === docId);
+      const section = doc?.sections.find(s => s.id === secId);
+      if (doc && section) jumpToSection(doc, section);
+    };
+  });
+}
+
+// --- existing functions (keep your existing implementations)
+function loadDocument(doc) {
+  currentDoc = doc;
+  
+  // Update active state in sidebar
+  document.querySelectorAll('.doc-link').forEach(link => {
+    link.classList.remove('active');
+  });
+  
+  const activeLink = document.querySelector(`[data-doc-id="${doc.id}"]`);
+  if (activeLink) {
+    activeLink.classList.add('active');
+  }
+  
+  // Hide answer panel and hints
+  const answerPanel = document.getElementById('answer-panel');
+  const hints = document.getElementById('ask-hints');
+  if (answerPanel) answerPanel.innerHTML = '';
+  if (hints) hints.style.display = 'block';
+  
+  // Render document content
+  let contentHtml = `
+    <div class="doc-section">
+      <h2>${doc.title}</h2>
+  `;
+  
+  doc.sections.forEach(section => {
+    contentHtml += `
+      <div id="${section.id}">
+        <h3>${section.heading}</h3>
+        <p>${section.body}</p>
+      </div>
+    `;
+  });
+  
+  contentHtml += `</div>`;
+  
+  const docContent = document.getElementById('doc-content');
+  if (docContent) {
+    docContent.innerHTML = contentHtml;
+    docContent.scrollTop = 0;
+  }
+  
+  announce(`Loaded document: ${doc.title}`);
 }
 
 function jumpToSection(doc, section) {
@@ -230,47 +302,6 @@ function jumpToSection(doc, section) {
   }, 100);
 }
 
-function loadDocument(doc) {
-  currentDoc = doc;
-  
-  // Update active state in sidebar
-  document.querySelectorAll('.doc-link').forEach(link => {
-    link.classList.remove('active');
-  });
-  
-  const activeLink = document.querySelector(`[data-doc-id="${doc.id}"]`);
-  if (activeLink) {
-    activeLink.classList.add('active');
-  }
-  
-  // Hide answer panel
-  answerPanel.style.display = 'none';
-  
-  // Render document content
-  let contentHtml = `
-    <div class="doc-section">
-      <h2>${doc.title}</h2>
-  `;
-  
-  doc.sections.forEach(section => {
-    contentHtml += `
-      <div id="${section.id}">
-        <h3>${section.heading}</h3>
-        <p>${section.body}</p>
-      </div>
-    `;
-  });
-  
-  contentHtml += `</div>`;
-  
-  docContent.innerHTML = contentHtml;
-  
-  // Scroll to top
-  docContent.scrollTop = 0;
-  
-  announce(`Loaded document: ${doc.title}`);
-}
-
 function announce(message) {
   const announcement = document.createElement('div');
   announcement.setAttribute('aria-live', 'polite');
@@ -284,12 +315,13 @@ function announce(message) {
   }, 1000);
 }
 
-function populateSidebar() {
-  if (!corpus) return;
+function renderSidebar(docs) {
+  const docList = document.getElementById('doc-list');
+  if (!docList) return;
   
   docList.innerHTML = '';
   
-  corpus.docs.forEach(doc => {
+  docs.forEach(doc => {
     const li = document.createElement('li');
     const link = document.createElement('a');
     link.href = '#';
@@ -306,50 +338,67 @@ function populateSidebar() {
   });
 }
 
-async function loadCorpus() {
-  try {
-    const response = await fetch('corpus.json');
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+function makeHintLi(query) {
+  const li = document.createElement('li');
+  li.textContent = `"${query}"`;
+  li.addEventListener('click', () => {
+    const input = document.getElementById('global-ask');
+    input.value = query;
+    const button = document.getElementById('ask-button');
+    if (button && !button.disabled) {
+      const q = input.value.trim();
+      if (q) {
+        const cands = searchCorpus(q);
+        renderAnswerOrFallback(q, cands);
+      }
     }
-    corpus = await response.json();
-    populateSidebar();
-  } catch (error) {
-    console.error('Failed to load corpus:', error);
-    announce('Failed to load documentation. Please refresh the page.');
-  }
+  });
+  return li;
 }
 
-function handleSearch() {
-  const query = askInput.value.trim();
-  if (!query) return;
+function renderHints() {
+  const hintsList = document.getElementById('hints-list');
+  if (!hintsList) return;
   
-  askInput.value = '';
-  
-  const results = searchCorpus(query);
-  const answer = generateAnswer(query, results);
-  renderAnswer(answer, query);
+  const filteredQueries = SAMPLE_QUERIES.filter(Boolean);
+  hintsList.replaceChildren(...filteredQueries.map(makeHintLi));
 }
 
-// Event listeners
-askButton.addEventListener('click', handleSearch);
-
-askInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    handleSearch();
+// --- init
+function initGlobalAsk() {
+  const input = document.getElementById('global-ask');
+  const button = document.getElementById('ask-button');
+  
+  function submit() {
+    if (!corpusReady) return;
+    const q = input.value.trim();
+    if (!q) {
+      const panel = document.getElementById('answer-panel');
+      const hints = document.getElementById('ask-hints');
+      panel.innerHTML = '';
+      if (hints) hints.style.display = '';
+      return;
+    }
+    const cands = searchCorpus(q);
+    renderAnswerOrFallback(q, cands);
   }
-});
+  
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  button.addEventListener('click', submit);
+  
+  // Global keyboard shortcut (Cmd/Ctrl+K)
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+  
+  // Render hints from JavaScript
+  renderHints();
+  
+  loadCorpus('corpus.json');
+}
 
-// Global keyboard shortcut (Cmd/Ctrl+K)
-document.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-    e.preventDefault();
-    askInput.focus();
-  }
-});
-
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-  loadCorpus();
-});
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', initGlobalAsk);

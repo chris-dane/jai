@@ -7,23 +7,6 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header role="banner">
-    <div class="header-content">
-      <h1>Global Documentation Q&A Prototype</h1>
-      <div class="ask-container" role="search" aria-label="Global documentation search">
-        <input 
-          id="global-ask" 
-          type="text" 
-          placeholder="Ask anything about our docs…" 
-          autocomplete="off"
-          aria-describedby="ask-help"
-        />
-        <button id="ask-button" type="button">Ask</button>
-        <div id="ask-help" class="sr-only">Press Enter or click Ask to search across all documentation</div>
-      </div>
-    </div>
-  </header>
-
   <div class="main-container">
     <nav role="navigation" aria-label="Documentation navigation" class="sidebar">
       <h2>Documentation</h2>
@@ -33,22 +16,23 @@
     </nav>
 
     <main role="main" class="content">
-      <div id="answer-panel" class="answer-panel" aria-live="polite" tabindex="-1" style="display: none;">
-        <!-- Answer content will be populated here -->
+      <div id="ask-block">
+        <div class="ask-container" role="search" aria-label="Global documentation search">
+          <input id="global-ask" type="text" placeholder="Ask anything about our docs…" autocomplete="off" />
+          <button id="ask-button" type="button" disabled>Ask</button>
+        </div>
+
+        <div id="ask-hints">
+          <p class="hints-title">Try asking questions like:</p>
+          <ul id="hints-list" class="hints-list"></ul>
+        </div>
+
+        <div id="answer-panel" aria-live="polite" tabindex="-1"></div>
+        <div id="load-state" class="load-state" aria-live="polite"></div>
       </div>
       
       <div id="doc-content" class="doc-content">
-        <div class="welcome-message">
-          <h2>Welcome to the Documentation</h2>
-          <p>Use the search bar above to ask questions about any topic, or browse the documentation using the sidebar.</p>
-          <p>Try asking questions like:</p>
-          <ul>
-            <li>"How do I set up authentication?"</li>
-            <li>"What are the API rate limits?"</li>
-            <li>"How do I deploy my application?"</li>
-            <li>"What security features are available?"</li>
-          </ul>
-        </div>
+        <!-- Document content will be populated here -->
       </div>
     </main>
   </div>
